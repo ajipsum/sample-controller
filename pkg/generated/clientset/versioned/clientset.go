@@ -1,5 +1,5 @@
 /*
-Copyright The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,27 +19,35 @@ limitations under the License.
 package versioned
 
 import (
+	moodlecontrollerv1 "github.com/cloud-ark/kubeplus-operators/moodle/pkg/client/clientset/versioned/typed/moodlecontroller/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
-	samplecontrollerv1alpha1 "k8s.io/sample-controller/pkg/generated/clientset/versioned/typed/samplecontroller/v1alpha1"
 )
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
-	SamplecontrollerV1alpha1() samplecontrollerv1alpha1.SamplecontrollerV1alpha1Interface
+	MoodlecontrollerV1() moodlecontrollerv1.MoodlecontrollerV1Interface
+	// Deprecated: please explicitly pick a version if possible.
+	Moodlecontroller() moodlecontrollerv1.MoodlecontrollerV1Interface
 }
 
 // Clientset contains the clients for groups. Each group has exactly one
 // version included in a Clientset.
 type Clientset struct {
 	*discovery.DiscoveryClient
-	samplecontrollerV1alpha1 *samplecontrollerv1alpha1.SamplecontrollerV1alpha1Client
+	moodlecontrollerV1 *moodlecontrollerv1.MoodlecontrollerV1Client
 }
 
-// SamplecontrollerV1alpha1 retrieves the SamplecontrollerV1alpha1Client
-func (c *Clientset) SamplecontrollerV1alpha1() samplecontrollerv1alpha1.SamplecontrollerV1alpha1Interface {
-	return c.samplecontrollerV1alpha1
+// MoodlecontrollerV1 retrieves the MoodlecontrollerV1Client
+func (c *Clientset) MoodlecontrollerV1() moodlecontrollerv1.MoodlecontrollerV1Interface {
+	return c.moodlecontrollerV1
+}
+
+// Deprecated: Moodlecontroller retrieves the default version of MoodlecontrollerClient.
+// Please explicitly pick a version.
+func (c *Clientset) Moodlecontroller() moodlecontrollerv1.MoodlecontrollerV1Interface {
+	return c.moodlecontrollerV1
 }
 
 // Discovery retrieves the DiscoveryClient
@@ -58,7 +66,7 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 	}
 	var cs Clientset
 	var err error
-	cs.samplecontrollerV1alpha1, err = samplecontrollerv1alpha1.NewForConfig(&configShallowCopy)
+	cs.moodlecontrollerV1, err = moodlecontrollerv1.NewForConfig(&configShallowCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +82,7 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 // panics if there is an error in the config.
 func NewForConfigOrDie(c *rest.Config) *Clientset {
 	var cs Clientset
-	cs.samplecontrollerV1alpha1 = samplecontrollerv1alpha1.NewForConfigOrDie(c)
+	cs.moodlecontrollerV1 = moodlecontrollerv1.NewForConfigOrDie(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
 	return &cs
@@ -83,7 +91,7 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
-	cs.samplecontrollerV1alpha1 = samplecontrollerv1alpha1.New(c)
+	cs.moodlecontrollerV1 = moodlecontrollerv1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &cs
