@@ -25,6 +25,6 @@ set -o pipefail
 #   instead of the $GOPATH directly. For normal projects this can be dropped.
 #  --output-base "$(dirname ${BASH_SOURCE})/../../.."
 $(dirname ${BASH_SOURCE})/../generate-groups.sh all \
-  github.com/cloud-ark/kubeplus/postgres-crd/pkg/client github.com/cloud-ark/kubeplus/postgres-crd/pkg/apis \
+  github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/apis \
   "postgrescontroller:v1"
 #  --output-base "$(dirname ${BASH_SOURCE})/../../.."

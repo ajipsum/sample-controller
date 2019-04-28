@@ -19,7 +19,7 @@ limitations under the License.
 package v1
 
 import (
-	v1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/apis/postgrescontroller/v1"
+	v1 "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/apis/postgrescontroller/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/cache"

@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"time"
+	"fmt"
 
 	"github.com/golang/glog"
 	kubeinformers "k8s.io/client-go/informers"
@@ -27,14 +28,18 @@ import (
 	// Uncomment the following line to load the gcp plugin (only required to authenticate against GKE clusters).
 	// _ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
-	clientset "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/clientset/versioned"
-	informers "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/informers/externalversions"
-	"github.com/cloud-ark/kubeplus/postgres-crd/pkg/signals"
+	clientset "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/clientset/versioned"
+	informers "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/informers/externalversions"
+	"github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/signals"
+	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	crdtypedef "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var (
 	masterURL  string
 	kubeconfig string
+	firstTime bool
 )
 
 func main() {
@@ -58,6 +63,18 @@ func main() {
 		glog.Fatalf("Error building example clientset: %s", err.Error())
 	}
 
+	/*
+	if firstTime {
+		firstTime = false
+		crdclient, err := apiextensionsclientset.NewForConfig(cfg)
+		if err != nil {
+			fmt.Println("Could not Register CRD. Register it using kubectl apply once the controller starts up.")
+		} else {
+			registerCRD(crdclient)
+		}
+	}
+	*/
+
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
 	exampleInformerFactory := informers.NewSharedInformerFactory(exampleClient, time.Second*30)
 
@@ -66,7 +83,7 @@ func main() {
 	go kubeInformerFactory.Start(stopCh)
 	go exampleInformerFactory.Start(stopCh)
 
-	if err = controller.Run(2, stopCh); err != nil {
+	if err = controller.Run(1, stopCh); err != nil {
 		glog.Fatalf("Error running controller: %s", err.Error())
 	}
 }
@@ -74,4 +91,37 @@ func main() {
 func init() {
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
 	flag.StringVar(&masterURL, "master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
+	//firstTime = true
+}
+
+func registerCRD(crdclient *apiextensionsclientset.Clientset) {
+	fmt.Println("Inside registerCRD")
+	crdName := "postgreses.postgrescontroller.kubeplus"
+	crdGroup := "postgrescontroller.kubeplus"
+	crdVersion := "v1"
+	crdKind := "Postgres"
+	crdPlural := "postgreses"
+	postgrescrd := &crdtypedef.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: crdName,
+		},
+		Spec: crdtypedef.CustomResourceDefinitionSpec{
+			Group: crdGroup,
+			Version: crdVersion,
+			Names: crdtypedef.CustomResourceDefinitionNames{
+				Plural: crdPlural,
+				Kind: crdKind,
+			},
+		},
+	}
+
+	postgrescrdObj, err := crdclient.ApiextensionsV1beta1().CustomResourceDefinitions().Get(crdName, metav1.GetOptions{})
+	if (postgrescrdObj == nil || err != nil) {
+		postgrescrdObj, err = crdclient.ApiextensionsV1beta1().CustomResourceDefinitions().Create(postgrescrd)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println("Postgres object created:%v", postgrescrdObj)
+		}
+	}
 }

@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	postgrescontroller "github.com/cloud-ark/kubeplus/postgres-crd/pkg/apis/postgrescontroller"
+	postgrescontroller "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/apis/postgrescontroller"
 )
 
 // SchemeGroupVersion is group version used to register these objects

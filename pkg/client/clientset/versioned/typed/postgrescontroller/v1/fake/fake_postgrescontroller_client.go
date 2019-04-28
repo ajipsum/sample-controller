@@ -19,7 +19,7 @@ limitations under the License.
 package fake
 
 import (
-	v1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/clientset/versioned/typed/postgrescontroller/v1"
+	v1 "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/clientset/versioned/typed/postgrescontroller/v1"
 	rest "k8s.io/client-go/rest"
 	testing "k8s.io/client-go/testing"
 )

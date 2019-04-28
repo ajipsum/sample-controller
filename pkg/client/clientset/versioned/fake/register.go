@@ -19,7 +19,7 @@ limitations under the License.
 package fake
 
 import (
-	postgrescontrollerv1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/apis/postgrescontroller/v1"
+	postgrescontrollerv1 "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/apis/postgrescontroller/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

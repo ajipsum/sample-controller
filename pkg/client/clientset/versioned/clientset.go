@@ -19,8 +19,7 @@ limitations under the License.
 package versioned
 
 import (
-	postgrescontrollerv1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/clientset/versioned/typed/postgrescontroller/v1"
-	glog "github.com/golang/glog"
+	postgrescontrollerv1 "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/clientset/versioned/typed/postgrescontroller/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -74,7 +73,6 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 
 	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfig(&configShallowCopy)
 	if err != nil {
-		glog.Errorf("failed to create the DiscoveryClient: %v", err)
 		return nil, err
 	}
 	return &cs, nil

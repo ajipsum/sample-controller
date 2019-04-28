@@ -19,8 +19,8 @@ limitations under the License.
 package postgrescontroller
 
 import (
-	internalinterfaces "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/informers/externalversions/internalinterfaces"
-	v1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/informers/externalversions/postgrescontroller/v1"
+	internalinterfaces "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/informers/externalversions/internalinterfaces"
+	v1 "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/informers/externalversions/postgrescontroller/v1"
 )
 
 // Interface provides access to each of this group's versions.

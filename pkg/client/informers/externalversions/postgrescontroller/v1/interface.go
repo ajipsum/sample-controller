@@ -19,7 +19,7 @@ limitations under the License.
 package v1
 
 import (
-	internalinterfaces "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/informers/externalversions/internalinterfaces"
+	internalinterfaces "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/informers/externalversions/internalinterfaces"
 )
 
 // Interface provides access to all the informers in this group version.

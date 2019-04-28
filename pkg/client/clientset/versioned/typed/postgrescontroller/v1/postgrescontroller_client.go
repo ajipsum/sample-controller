@@ -19,8 +19,8 @@ limitations under the License.
 package v1
 
 import (
-	v1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/apis/postgrescontroller/v1"
-	"github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/clientset/versioned/scheme"
+	v1 "github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/apis/postgrescontroller/v1"
+	"github.com/cloud-ark/kubeplus/postgres-crd-v2/pkg/client/clientset/versioned/scheme"
 	serializer "k8s.io/apimachinery/pkg/runtime/serializer"
 	rest "k8s.io/client-go/rest"
 )

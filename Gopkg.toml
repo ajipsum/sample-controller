@@ -24,30 +24,29 @@
 #   go-tests = true
 #   unused-packages = true
 
-
-[[constraint]]
-  name = "github.com/gogo/protobuf"
-  version = "1.0.0"
-
 [[constraint]]
   branch = "master"
   name = "github.com/golang/glog"
 
 [[constraint]]
-  name = "github.com/spf13/pflag"
+  name = "github.com/lib/pq"
   version = "1.0.0"
 
 [[constraint]]
   branch = "master"
-  name = "k8s.io/code-generator"
+  name = "k8s.io/api"
 
 [[constraint]]
-  branch = "master"
-  name = "k8s.io/gengo"
+  branch = "release-1.11"
+  name = "k8s.io/apiextensions-apiserver"
 
 [[constraint]]
-  branch = "master"
-  name = "k8s.io/kube-openapi"
+  branch = "release-1.11"
+  name = "k8s.io/apimachinery"
+
+[[constraint]]
+  name = "k8s.io/client-go"
+  version = "8.0.0"
 
 [prune]
   go-tests = true
