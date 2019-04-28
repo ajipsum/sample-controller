@@ -19,32 +19,39 @@ package main
 import (
 	"fmt"
 	"time"
+        "os"
+        "os/exec"
+        "io/ioutil"
+	"strings"
 
+	apiutil "k8s.io/apimachinery/pkg/util/intstr" 
+        apiv1 "k8s.io/api/core/v1"
+        metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+        "k8s.io/client-go/kubernetes"
+
+	"github.com/golang/glog"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	appsinformers "k8s.io/client-go/informers/apps/v1"
-	"k8s.io/client-go/kubernetes"
+	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog"
 
-	samplev1alpha1 "k8s.io/sample-controller/pkg/apis/samplecontroller/v1alpha1"
-	clientset "k8s.io/sample-controller/pkg/generated/clientset/versioned"
-	samplescheme "k8s.io/sample-controller/pkg/generated/clientset/versioned/scheme"
-	informers "k8s.io/sample-controller/pkg/generated/informers/externalversions/samplecontroller/v1alpha1"
-	listers "k8s.io/sample-controller/pkg/generated/listers/samplecontroller/v1alpha1"
+	postgresv1 "github.com/cloud-ark/kubeplus/postgres-crd/pkg/apis/postgrescontroller/v1"
+	clientset "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/clientset/versioned"
+	postgresscheme "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/clientset/versioned/scheme"
+	informers "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/informers/externalversions"
+	listers "github.com/cloud-ark/kubeplus/postgres-crd/pkg/client/listers/postgrescontroller/v1"
 )
 
-const controllerAgentName = "sample-controller"
+const controllerAgentName = "postgres-controller"
 
 const (
 	// SuccessSynced is used as part of the Event 'reason' when a Foo is synced
@@ -61,6 +68,11 @@ const (
 	MessageResourceSynced = "Foo synced successfully"
 )
 
+const (
+      PGPASSWORD = "mysecretpassword"
+      MINIKUBE_IP = "192.168.99.100"
+)
+
 // Controller is the controller implementation for Foo resources
 type Controller struct {
 	// kubeclientset is a standard kubernetes clientset
@@ -70,7 +82,7 @@ type Controller struct {
 
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
-	foosLister        listers.FooLister
+	foosLister        listers.PostgresLister
 	foosSynced        cache.InformerSynced
 
 	// workqueue is a rate limited work queue. This is used to queue work to be
@@ -88,16 +100,21 @@ type Controller struct {
 func NewController(
 	kubeclientset kubernetes.Interface,
 	sampleclientset clientset.Interface,
-	deploymentInformer appsinformers.DeploymentInformer,
-	fooInformer informers.FooInformer) *Controller {
+	kubeInformerFactory kubeinformers.SharedInformerFactory,
+	sampleInformerFactory informers.SharedInformerFactory) *Controller {
+
+	// obtain references to shared index informers for the Deployment and Foo
+	// types.
+	deploymentInformer := kubeInformerFactory.Apps().V1().Deployments()
+	fooInformer := sampleInformerFactory.Postgrescontroller().V1().Postgreses()
 
 	// Create event broadcaster
-	// Add sample-controller types to the default Kubernetes Scheme so Events can be
-	// logged for sample-controller types.
-	utilruntime.Must(samplescheme.AddToScheme(scheme.Scheme))
-	klog.V(4).Info("Creating event broadcaster")
+	// Add postgres-controller types to the default Kubernetes Scheme so Events can be
+	// logged for postgres-controller types.
+	postgresscheme.AddToScheme(scheme.Scheme)
+	glog.V(4).Info("Creating event broadcaster")
 	eventBroadcaster := record.NewBroadcaster()
-	eventBroadcaster.StartLogging(klog.Infof)
+	eventBroadcaster.StartLogging(glog.Infof)
 	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("")})
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerAgentName})
 
@@ -108,11 +125,11 @@ func NewController(
 		deploymentsSynced: deploymentInformer.Informer().HasSynced,
 		foosLister:        fooInformer.Lister(),
 		foosSynced:        fooInformer.Informer().HasSynced,
-		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "Foos"),
+		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "Postgreses"),
 		recorder:          recorder,
 	}
 
-	klog.Info("Setting up event handlers")
+	glog.Info("Setting up event handlers")
 	// Set up an event handler for when Foo resources change
 	fooInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.enqueueFoo,
@@ -149,27 +166,27 @@ func NewController(
 // is closed, at which point it will shutdown the workqueue and wait for
 // workers to finish processing their current work items.
 func (c *Controller) Run(threadiness int, stopCh <-chan struct{}) error {
-	defer utilruntime.HandleCrash()
+	defer runtime.HandleCrash()
 	defer c.workqueue.ShutDown()
 
 	// Start the informer factories to begin populating the informer caches
-	klog.Info("Starting Foo controller")
+	glog.Info("Starting Foo controller")
 
 	// Wait for the caches to be synced before starting workers
-	klog.Info("Waiting for informer caches to sync")
+	glog.Info("Waiting for informer caches to sync")
 	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.foosSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
-	klog.Info("Starting workers")
+	glog.Info("Starting workers")
 	// Launch two workers to process Foo resources
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
 
-	klog.Info("Started workers")
+	glog.Info("Started workers")
 	<-stopCh
-	klog.Info("Shutting down workers")
+	glog.Info("Shutting down workers")
 
 	return nil
 }
@@ -212,25 +229,23 @@ func (c *Controller) processNextWorkItem() bool {
 			// Forget here else we'd go into a loop of attempting to
 			// process a work item that is invalid.
 			c.workqueue.Forget(obj)
-			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
+			runtime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
 			return nil
 		}
 		// Run the syncHandler, passing it the namespace/name string of the
 		// Foo resource to be synced.
 		if err := c.syncHandler(key); err != nil {
-			// Put the item back on the workqueue to handle any transient errors.
-			c.workqueue.AddRateLimited(key)
-			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
+			return fmt.Errorf("error syncing '%s': %s", key, err.Error())
 		}
 		// Finally, if no error occurs we Forget this item so it does not
 		// get queued again until another change happens.
 		c.workqueue.Forget(obj)
-		klog.Infof("Successfully synced '%s'", key)
+		glog.Infof("Successfully synced '%s'", key)
 		return nil
 	}(obj)
 
 	if err != nil {
-		utilruntime.HandleError(err)
+		runtime.HandleError(err)
 		return true
 	}
 
@@ -241,94 +256,148 @@ func (c *Controller) processNextWorkItem() bool {
 // converge the two. It then updates the Status block of the Foo resource
 // with the current status of the resource.
 func (c *Controller) syncHandler(key string) error {
+     	//fmt.Println("Inside syncHandler 1")
 	// Convert the namespace/name string into a distinct namespace and name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
+		runtime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 		return nil
 	}
 
 	// Get the Foo resource with this namespace/name
-	foo, err := c.foosLister.Foos(namespace).Get(name)
+	foo, err := c.foosLister.Postgreses(namespace).Get(name)
 	if err != nil {
 		// The Foo resource may no longer exist, in which case we stop
 		// processing.
 		if errors.IsNotFound(err) {
-			utilruntime.HandleError(fmt.Errorf("foo '%s' in work queue no longer exists", key))
+			runtime.HandleError(fmt.Errorf("foo '%s' in work queue no longer exists", key))
 			return nil
 		}
-
 		return err
 	}
+
+	//fmt.Println("Inside syncHandler 2")
 
 	deploymentName := foo.Spec.DeploymentName
 	if deploymentName == "" {
 		// We choose to absorb the error here as the worker would requeue the
 		// resource otherwise. Instead, the next time the resource is updated
 		// the resource will be queued again.
-		utilruntime.HandleError(fmt.Errorf("%s: deployment name must be specified", key))
+		runtime.HandleError(fmt.Errorf("%s: deployment name must be specified", key))
 		return nil
 	}
 
+	var verifyCmd string
+	var actionHistory []string
+	var serviceIP string
+	var servicePort string
+	var setupCommands []string
+
 	// Get the deployment with the name specified in Foo.spec
-	deployment, err := c.deploymentsLister.Deployments(foo.Namespace).Get(deploymentName)
+	_, err = c.deploymentsLister.Deployments(foo.Namespace).Get(deploymentName)
 	// If the resource doesn't exist, we'll create it
 	if errors.IsNotFound(err) {
-		deployment, err = c.kubeclientset.AppsV1().Deployments(foo.Namespace).Create(newDeployment(foo))
-	}
+	   fmt.Printf("Received request to create CRD %s\n", deploymentName)
+	   serviceIP, servicePort, setupCommands, verifyCmd = createDeployment(foo, c)
+	   for _, cmds := range setupCommands {
+	       actionHistory = append(actionHistory, cmds)
+	   }
+           fmt.Printf("Setup Commands: %v\n", setupCommands)
+           fmt.Printf("Verify using: %v\n", verifyCmd)
+	   err = c.updateFooStatus(foo, &actionHistory, verifyCmd, serviceIP, servicePort, "READY")
+	   if err != nil {
+	      	 return err
+	   }
+	} else {
+	  fmt.Printf("CRD %s created\n", deploymentName)
+	  fmt.Printf("Check using: kubectl describe postgres %s \n", deploymentName)
 
-	// If an error occurs during Get/Create, we'll requeue the item so we can
-	// attempt processing again later. This could have been caused by a
-	// temporary network failure, or any other transient reason.
-	if err != nil {
-		return err
-	}
+	  pgresObj, err := c.sampleclientset.PostgrescontrollerV1().Postgreses(foo.Namespace).Get(deploymentName,
+												metav1.GetOptions{})
 
-	// If the Deployment is not controlled by this Foo resource, we should log
-	// a warning to the event recorder and ret
-	if !metav1.IsControlledBy(deployment, foo) {
-		msg := fmt.Sprintf(MessageResourceExists, deployment.Name)
-		c.recorder.Event(foo, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return fmt.Errorf(msg)
-	}
+	  actionHistory := pgresObj.Status.ActionHistory
+	  serviceIP := pgresObj.Status.ServiceIP
+	  servicePort := pgresObj.Status.ServicePort
+	  verifyCmd := pgresObj.Status.VerifyCmd
+	  fmt.Printf("Action History:[%s]\n", actionHistory)
+	  fmt.Printf("Service IP:[%s]\n", serviceIP)
+	  fmt.Printf("Service Port:[%s]\n", servicePort)
+	  fmt.Printf("Verify cmd: %v\n", verifyCmd)
 
-	// If this number of the replicas on the Foo resource is specified, and the
-	// number does not equal the current desired replicas on the Deployment, we
-	// should update the Deployment resource.
-	if foo.Spec.Replicas != nil && *foo.Spec.Replicas != *deployment.Spec.Replicas {
-		klog.V(4).Infof("Foo %s replicas: %d, deployment replicas: %d", name, *foo.Spec.Replicas, *deployment.Spec.Replicas)
-		deployment, err = c.kubeclientset.AppsV1().Deployments(foo.Namespace).Update(newDeployment(foo))
-	}
+	  setupCommands = canonicalize(foo.Spec.Commands)
 
-	// If an error occurs during Update, we'll requeue the item so we can
-	// attempt processing again later. THis could have been caused by a
-	// temporary network failure, or any other transient reason.
-	if err != nil {
-		return err
-	}
+	  var commandsToRun []string
+	  commandsToRun = getCommandsToRun(actionHistory, setupCommands)
+	  fmt.Printf("commandsToRun: %v\n", commandsToRun)
 
-	// Finally, we update the status block of the Foo resource to reflect the
-	// current state of the world
-	err = c.updateFooStatus(foo, deployment)
-	if err != nil {
-		return err
+	  if len(commandsToRun) > 0 {
+	     err = c.updateFooStatus(foo, &actionHistory, verifyCmd, serviceIP, servicePort, "UPDATING")
+	     if err != nil {
+         	return err
+	     }
+	     updateCRD(pgresObj, c, commandsToRun)
+	     for _, cmds := range commandsToRun {
+	     	   actionHistory = append(actionHistory, cmds)
+	     }
+	     err = c.updateFooStatus(foo, &actionHistory, verifyCmd, 
+	     	   	             serviceIP, servicePort, "READY")
+	     if err != nil {
+	     	return err
+	     }
+	  }
 	}
-
 	c.recorder.Event(foo, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
 	return nil
 }
 
-func (c *Controller) updateFooStatus(foo *samplev1alpha1.Foo, deployment *appsv1.Deployment) error {
+func getCommandsToRun(actionHistory []string, setupCommands []string) []string {
+     var commandsToRun []string
+     for _, v := range setupCommands {
+     	 var found bool = false
+     	 for _, v1 := range actionHistory {
+	     if v == v1 {
+	     	found = true
+	     }
+	 }
+	 if !found {
+	    commandsToRun = append(commandsToRun, v)
+	 }
+     }
+     fmt.Printf("-- commandsToRun: %v--\n", commandsToRun)     
+     return commandsToRun
+}
+
+
+func canonicalize(setupCommands1 []string) []string {
+     var setupCommands []string
+     //Convert setupCommands to Lower case
+     for _, cmd := range setupCommands1 {
+     	 setupCommands = append(setupCommands, strings.ToLower(cmd))
+     }
+  return setupCommands
+}
+
+func (c *Controller) updateFooStatus(foo *postgresv1.Postgres, 
+     actionHistory *[]string, verifyCmd string, serviceIP string, servicePort string,
+     status string) error {
 	// NEVER modify objects from the store. It's a read-only, local cache.
 	// You can use DeepCopy() to make a deep copy of original object and modify this copy
 	// Or create a copy manually for better performance
 	fooCopy := foo.DeepCopy()
-	fooCopy.Status.AvailableReplicas = deployment.Status.AvailableReplicas
-	// If the CustomResourceSubresources feature gate is not enabled,
-	// we must use Update instead of UpdateStatus to update the Status block of the Foo resource.
-	// UpdateStatus will not allow changes to the Spec of the resource,
-	// which is ideal for ensuring nothing other than resource status has been updated.
-	_, err := c.sampleclientset.SamplecontrollerV1alpha1().Foos(foo.Namespace).Update(fooCopy)
+	//fooCopy.Status.AvailableReplicas = deployment.Status.AvailableReplicas
+	fooCopy.Status.AvailableReplicas = 1
+
+	//fooCopy.Status.ActionHistory = strings.Join(*actionHistory, " ")
+	fooCopy.Status.VerifyCmd = verifyCmd
+	fooCopy.Status.ActionHistory = *actionHistory
+	fooCopy.Status.ServiceIP = serviceIP
+	fooCopy.Status.ServicePort = servicePort
+	fooCopy.Status.Status = status
+	// Until #38113 is merged, we must use Update instead of UpdateStatus to
+	// update the Status block of the Foo resource. UpdateStatus will not
+	// allow changes to the Spec of the resource, which is ideal for ensuring
+	// nothing other than resource status has been updated.
+	_, err := c.sampleclientset.PostgrescontrollerV1().Postgreses(foo.Namespace).Update(fooCopy)
 	return err
 }
 
@@ -339,10 +408,10 @@ func (c *Controller) enqueueFoo(obj interface{}) {
 	var key string
 	var err error
 	if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
-		utilruntime.HandleError(err)
+		runtime.HandleError(err)
 		return
 	}
-	c.workqueue.Add(key)
+	c.workqueue.AddRateLimited(key)
 }
 
 // handleObject will take any resource implementing metav1.Object and attempt
@@ -356,17 +425,17 @@ func (c *Controller) handleObject(obj interface{}) {
 	if object, ok = obj.(metav1.Object); !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
-			utilruntime.HandleError(fmt.Errorf("error decoding object, invalid type"))
+			runtime.HandleError(fmt.Errorf("error decoding object, invalid type"))
 			return
 		}
 		object, ok = tombstone.Obj.(metav1.Object)
 		if !ok {
-			utilruntime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
+			runtime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
 			return
 		}
-		klog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
+		glog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
 	}
-	klog.V(4).Infof("Processing object: %s", object.GetName())
+	glog.V(4).Infof("Processing object: %s", object.GetName())
 	if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
 		// If this object is not owned by a Foo, we should not do anything more
 		// with it.
@@ -374,9 +443,9 @@ func (c *Controller) handleObject(obj interface{}) {
 			return
 		}
 
-		foo, err := c.foosLister.Foos(object.GetNamespace()).Get(ownerRef.Name)
+		foo, err := c.foosLister.Postgreses(object.GetNamespace()).Get(ownerRef.Name)
 		if err != nil {
-			klog.V(4).Infof("ignoring orphaned object '%s' of foo '%s'", object.GetSelfLink(), ownerRef.Name)
+			glog.V(4).Infof("ignoring orphaned object '%s' of foo '%s'", object.GetSelfLink(), ownerRef.Name)
 			return
 		}
 
@@ -385,10 +454,271 @@ func (c *Controller) handleObject(obj interface{}) {
 	}
 }
 
+func updateCRD(foo *postgresv1.Postgres, c *Controller, setupCommands []string) {
+     serviceIP := foo.Status.ServiceIP
+     servicePort := foo.Status.ServicePort
+
+     //setupCommands1 := foo.Spec.Commands
+     //var setupCommands []string
+
+     //Convert setupCommands to Lower case
+     //for _, cmd := range setupCommands1 {
+     //	 setupCommands = append(setupCommands, strings.ToLower(cmd))
+     //}
+
+     fmt.Printf("Service IP:[%s]\n", serviceIP)
+     fmt.Printf("Service Port:[%s]\n", servicePort)
+     fmt.Printf("Command:[%s]\n", setupCommands)
+
+     if len(setupCommands) > 0 {
+     	file := createTempDBFile(setupCommands)
+     	fmt.Println("Now setting up the database")
+     	setupDatabase(serviceIP, servicePort, file)
+     }
+}
+
+func createDeployment(foo *postgresv1.Postgres, c *Controller) (string, string, []string, string) {
+
+        deploymentsClient := c.kubeclientset.AppsV1().Deployments(apiv1.NamespaceDefault)
+
+	deploymentName := foo.Spec.DeploymentName
+	image := foo.Spec.Image
+	username := foo.Spec.Username
+	password := foo.Spec.Password
+	database := foo.Spec.Database
+	setupCommands := canonicalize(foo.Spec.Commands)
+
+	fmt.Printf("   Deployment:%v, Image:%v, User:%v\n", deploymentName, image, username)
+	fmt.Printf("   Password:%v, Database:%v\n", password, database)
+	fmt.Printf("   SetupCmds:%v\n", setupCommands)
+
+        deployment := &appsv1.Deployment{
+                ObjectMeta: metav1.ObjectMeta{
+                        Name: deploymentName,
+                },
+                Spec: appsv1.DeploymentSpec{
+                        Replicas: int32Ptr(1),
+                        Selector: &metav1.LabelSelector{
+                                MatchLabels: map[string]string{
+                                             "app": deploymentName,
+                                },
+                        },
+                        Template: apiv1.PodTemplateSpec{
+                                ObjectMeta: metav1.ObjectMeta{
+                                        Labels: map[string]string{
+                                                "app": deploymentName,
+                                        },
+                                },
+
+                                Spec: apiv1.PodSpec{
+                                        Containers: []apiv1.Container{
+                                                {
+                                                        Name:  deploymentName,
+                                                        Image: image,
+							Ports: []apiv1.ContainerPort{
+							      {
+								ContainerPort: 5432,
+							      },
+							},
+							ReadinessProbe: &apiv1.Probe{
+								Handler: apiv1.Handler{
+								   TCPSocket: &apiv1.TCPSocketAction{
+								      Port: apiutil.FromInt(5432),
+								   },
+								},
+								InitialDelaySeconds: 5,
+								TimeoutSeconds: 60,
+								PeriodSeconds: 2,
+							},
+                                                        Env: []apiv1.EnvVar{
+                                                           {
+                                                             Name: "POSTGRES_PASSWORD",
+                                                             Value: PGPASSWORD,
+                                                           },
+                                                        },
+                                                },
+                                        },
+                                },
+                        },
+                },
+        }
+
+        // Create Deployment
+        fmt.Println("Creating deployment...")
+        result, err := deploymentsClient.Create(deployment)
+        if err != nil {
+                panic(err)
+        }
+        fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
+        fmt.Printf("------------------------------\n")
+
+        // Create Service
+        fmt.Printf("Creating service...\n")
+        serviceClient := c.kubeclientset.CoreV1().Services(apiv1.NamespaceDefault)
+        service := &apiv1.Service{
+                ObjectMeta: metav1.ObjectMeta{
+                        Name: deploymentName,
+                        Labels: map[string]string{
+                                "app": deploymentName,
+                        },
+                },
+                Spec: apiv1.ServiceSpec{
+                        Ports: []apiv1.ServicePort {
+                             {
+                                Name: "my-port",
+                                Port: 5432,
+				TargetPort: apiutil.FromInt(5432),
+				Protocol: apiv1.ProtocolTCP,
+                             },
+                        },
+                        Selector: map[string]string {
+                                  "app": deploymentName,
+                        },
+                        Type: apiv1.ServiceTypeNodePort,
+                },
+        }
+
+        result1, err1 := serviceClient.Create(service)
+        if err1 != nil {
+                panic(err1)
+        }
+        fmt.Printf("Created service %q.\n", result1.GetObjectMeta().GetName())
+        fmt.Printf("------------------------------\n")
+
+        // Parse ServiceIP and Port
+	// Minikube VM IP
+        serviceIP := MINIKUBE_IP
+
+        nodePort1 := result1.Spec.Ports[0].NodePort
+	nodePort := fmt.Sprint(nodePort1)
+	servicePort := nodePort
+	//fmt.Printf("NodePort:[%v]", nodePort)
+
+	//fmt.Println("About to get Pods")
+	time.Sleep(time.Second * 5)
+
+	for {
+	    readyPods := 0
+	    pods := getPods(c, deploymentName)
+	    //fmt.Println("Got Pods:: %s", pods)
+	    for _, d := range pods.Items {
+                //fmt.Printf(" * %s %s \n", d.Name, d.Status)
+		podConditions := d.Status.Conditions
+		for _, podCond := range podConditions {
+		    if podCond.Type == corev1.PodReady {
+		       if podCond.Status == corev1.ConditionTrue {
+		       	     //fmt.Println("Pod is running.")
+			     readyPods += 1
+			     //fmt.Printf("ReadyPods:%d\n", readyPods)
+			     //fmt.Printf("TotalPods:%d\n", len(pods.Items))
+		       	  }
+		    }
+		}
+       	    }
+	    if readyPods >= len(pods.Items) {
+	       break
+	    } else {
+	      	   fmt.Println("Waiting for Pod to get ready.")
+		   // Sleep for the Pod to become active
+		   time.Sleep(time.Second * 4)
+	    }
+	}
+
+	// Wait couple of seconds more just to give the Pod some more time.
+	time.Sleep(time.Second * 2)
+
+	if len(setupCommands) > 0 {
+	    file := createTempDBFile(setupCommands)
+	    fmt.Println("Now setting up the database")
+	    setupDatabase(serviceIP, servicePort, file)
+	}
+
+        // List Deployments
+        //fmt.Printf("Listing deployments in namespace %q:\n", apiv1.NamespaceDefault)
+        //list, err := deploymentsClient.List(metav1.ListOptions{})
+        //if err != nil {
+        //        panic(err)
+        //}
+        //for _, d := range list.Items {
+        //        fmt.Printf(" * %s (%d replicas)\n", d.Name, *d.Spec.Replicas)
+        //}
+
+     	verifyCmd := strings.Fields("psql -h " + serviceIP + " -p " + nodePort + " -U <user> " + " -d <db-name>")
+	var verifyCmdString = strings.Join(verifyCmd, " ")
+	fmt.Printf("VerifyCmd: %v\n", verifyCmd)
+	return serviceIP, servicePort, setupCommands, verifyCmdString
+}
+
+func setupDatabase(serviceIP string, servicePort string, file *os.File) {
+
+     defer os.Remove(file.Name())
+
+     //Execute PSQL command file against Service IP
+     //export PGPASSWORD=mysecretpassword; psql -h <Service IP> -p <Service Port> -U postgres -f file.Name()
+
+     args := strings.Fields("psql -h " + serviceIP + " -p " + servicePort + " -U postgres " + " -f " + file.Name())
+     fmt.Printf("Database setup command: %v\n", args)
+
+     envName := "PGPASSWORD"
+     envValue := PGPASSWORD
+     newEnv := append(os.Environ(), fmt.Sprintf("%s=%s", envName, envValue))
+     //fmt.Printf("NewEnv: %v\n", newEnv)
+
+     cmd := exec.Command(args[0], args[1:]...)
+     cmd.Env = newEnv
+
+     out, err := cmd.CombinedOutput()
+     if err != nil {
+     	fmt.Printf("Err:%v\n", err)
+	fmt.Printf("Out:%v\n", out)
+	fmt.Printf("Out:%s\n", out)
+	panic(err)
+     }
+}
+
+func createTempDBFile(setupCommands []string) (*os.File){
+     file, err := ioutil.TempFile("/tmp", "create-db1")
+     if err != nil {
+     	panic(err)
+     }
+
+     fmt.Printf("Database setup file:%s\n", file.Name())
+
+     for _, command := range setupCommands {
+     	 //fmt.Printf("Command: %v\n", command)
+	 // TODO: Interpolation of variables	    
+         file.WriteString(command)
+         file.WriteString("\n")
+     }
+     file.Sync()
+     file.Close()
+     return file
+}
+
+func getPods(c *Controller, deploymentName string) *apiv1.PodList {
+        // TODO(devkulkarni): This is returning all Pods. We should change this
+        // to only return Pods whose Label matches the Deployment Name.
+        pods, err := c.kubeclientset.CoreV1().Pods("default").List(metav1.ListOptions{
+	      	  //LabelSelector: deploymentName,
+	      	//LabelSelector: metav1.LabelSelector{
+		//	MatchLabels: map[string]string{
+		//	"app": deploymentName,
+		//},
+		//},
+	})
+	//fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
+	if err != nil {
+	   fmt.Printf("%s", err)
+	}
+	//fmt.Println("Got Pods: %s", pods)
+	return pods
+}
+
+
 // newDeployment creates a new Deployment for a Foo resource. It also sets
 // the appropriate OwnerReferences on the resource so handleObject can discover
 // the Foo resource that 'owns' it.
-func newDeployment(foo *samplev1alpha1.Foo) *appsv1.Deployment {
+func newDeployment(foo *postgresv1.Postgres) *appsv1.Deployment {
 	labels := map[string]string{
 		"app":        "nginx",
 		"controller": foo.Name,
@@ -399,9 +729,9 @@ func newDeployment(foo *samplev1alpha1.Foo) *appsv1.Deployment {
 			Namespace: foo.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(foo, schema.GroupVersionKind{
-					Group:   samplev1alpha1.SchemeGroupVersion.Group,
-					Version: samplev1alpha1.SchemeGroupVersion.Version,
-					Kind:    "Foo",
+					Group:   postgresv1.SchemeGroupVersion.Group,
+					Version: postgresv1.SchemeGroupVersion.Version,
+					Kind:    "Postgres",
 				}),
 			},
 		},
@@ -426,3 +756,5 @@ func newDeployment(foo *samplev1alpha1.Foo) *appsv1.Deployment {
 		},
 	}
 }
+
+func int32Ptr(i int32) *int32 { return &i }

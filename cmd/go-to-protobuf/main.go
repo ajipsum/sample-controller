@@ -1,5 +1,5 @@
 /*
-Copyright YEAR The Kubernetes Authors.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,3 +14,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// go-to-protobuf generates a Protobuf IDL from a Go struct, respecting any
+// existing IDL tags on the Go struct.
+package main
+
+import (
+	goflag "flag"
+
+	flag "github.com/spf13/pflag"
+	"k8s.io/code-generator/cmd/go-to-protobuf/protobuf"
+)
+
+var g = protobuf.New()
+
+func init() {
+	g.BindFlags(flag.CommandLine)
+	goflag.Set("logtostderr", "true")
+	flag.CommandLine.AddGoFlagSet(goflag.CommandLine)
+}
+
+func main() {
+	flag.Parse()
+	protobuf.Run(g)
+}
